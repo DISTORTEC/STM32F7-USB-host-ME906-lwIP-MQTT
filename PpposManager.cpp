@@ -239,15 +239,11 @@ void PpposManager::pppLinkStatus(const int errorCode)
 	{
 		case PPPERR_NONE:	// no error
 			fiprintf(standardOutputStream, "PpposManager::pppLinkStatus: PPPERR_NONE\r\n");
-#if LWIP_IPV4
 			fiprintf(standardOutputStream, "  ip4 = %s\r\n", ip4addr_ntoa(netif_ip4_addr(&netif_)));
 			fiprintf(standardOutputStream, "  gateway = %s\r\n", ip4addr_ntoa(netif_ip4_gw(&netif_)));
 			fiprintf(standardOutputStream, "  netmask = %s\r\n", ip4addr_ntoa(netif_ip4_netmask(&netif_)));
-#endif	// LWIP_IPV4
-#if LWIP_DNS
 			fiprintf(standardOutputStream, "  dns1 = %s\r\n", ipaddr_ntoa(dns_getserver(0)));
 			fiprintf(standardOutputStream, "  dns2 = %s\r\n", ipaddr_ntoa(dns_getserver(1)));
-#endif	// LWIP_DNS
 			break;
 		case PPPERR_PARAM:	// invalid parameter
 			fiprintf(standardOutputStream, "PpposManager::pppLinkStatus: PPPERR_PARAM\r\n");
