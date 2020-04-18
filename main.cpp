@@ -330,9 +330,9 @@ int main()
 	{
 		int ret;
 		struct addrinfo* addressInformation;
-		while (ret = getaddrinfo("broker.hivemq.com", nullptr, nullptr, &addressInformation), ret != 0)
+		while (ret = lwip_getaddrinfo("broker.hivemq.com", nullptr, nullptr, &addressInformation), ret != 0)
 		{
-			fiprintf(standardOutputStream, "getaddrinfo() failed, ret = %d\r\n", ret);
+			fiprintf(standardOutputStream, "lwip_getaddrinfo() failed, ret = %d\r\n", ret);
 			distortos::ThisThread::sleepFor(std::chrono::seconds{5});
 		}
 
@@ -344,7 +344,7 @@ int main()
 		fiprintf(standardOutputStream, "%s is %s\r\n", addressInformation->ai_canonname, ip4addr_ntoa_r(&ip, buffer,
 				sizeof(buffer)));
 
-		freeaddrinfo(addressInformation);
+		lwip_freeaddrinfo(addressInformation);
 	}
 
 	MqttClient mqttClient {};
