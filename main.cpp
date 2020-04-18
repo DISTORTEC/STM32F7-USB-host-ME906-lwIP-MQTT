@@ -11,7 +11,6 @@
 
 #define _GNU_SOURCE
 
-#include "HuaweiMe906.hpp"
 #include "openHuaweiMe906.hpp"
 #include "PpposManager.hpp"
 
@@ -25,6 +24,7 @@
 
 #include "distortos/chip/InputPin.hpp"
 #include "distortos/chip/OutputPin.hpp"
+#include "distortos/chip/uniqueDeviceId.hpp"
 
 #include "distortos/distortosVersion.h"
 #include "distortos/DynamicThread.hpp"
@@ -34,8 +34,6 @@
 
 #include "lwip/netdb.h"
 #include "lwip/tcpip.h"
-
-#include <cstring>
 
 /*---------------------------------------------------------------------------------------------------------------------+
 | local defines
@@ -354,7 +352,17 @@ int main()
 	assert(mqttClient.client != nullptr);
 	UNLOCK_TCPIP_CORE();
 
-	mqttClient.connectionInfo.client_id = "MQTT client";
+	char clientId[sizeof(DISTORTOS_BOARD "-123456781234567812345678")];
+	{
+		const auto ret = sniprintf(clientId, sizeof(clientId), DISTORTOS_BOARD "-%08" PRIx32 "%08" PRIx32 "%08" PRIx32,
+				distortos::chip::uniqueDeviceId->uint32[0], distortos::chip::uniqueDeviceId->uint32[1],
+				distortos::chip::uniqueDeviceId->uint32[2]);
+		assert(ret > 0 && ret == sizeof(clientId) - 1);
+	}
+
+	fiprintf(standardOutputStream, "MQTT client ID is \"%s\"\r\n", clientId);
+
+	mqttClient.connectionInfo.client_id = clientId;
 	mqttClient.connectionInfo.client_user = {};
 	mqttClient.connectionInfo.client_pass = {};
 	mqttClient.connectionInfo.keep_alive = 60;
