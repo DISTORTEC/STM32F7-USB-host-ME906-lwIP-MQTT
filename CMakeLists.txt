@@ -1,7 +1,7 @@
 #
 # file: CMakeLists.txt
 #
-# author: Copyright (C) 2019 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
+# author: Copyright (C) 2019-2020 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
 #
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not
 # distributed with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -22,10 +22,9 @@ target_include_directories(distortos INTERFACE
 # STM32F7xx_HAL_Driver library
 #-----------------------------------------------------------------------------------------------------------------------
 
-include(${CMAKE_CURRENT_LIST_DIR}/STM32F7xx_HAL_Driver/STM32F7xx_HAL_Driver-sources.cmake)
-include(${CMAKE_CURRENT_LIST_DIR}/STM32F7xx_HAL_Driver-integration/STM32F7xx_HAL_Driver-sources.cmake)
-target_include_directories(STM32F7xx_HAL_Driver PUBLIC
-		${CMAKE_CURRENT_LIST_DIR})
+set(STM32F7XX_HAL_DRIVER_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/STM32F7xx_HAL_Driver")
+set(STM32F7XX_HAL_DRIVER_CONFIGURATION_H_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}")
+add_subdirectory(STM32F7xx_HAL_Driver-integration)
 
 #-----------------------------------------------------------------------------------------------------------------------
 # CMSIS-RTOS2 library
