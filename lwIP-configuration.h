@@ -2,7 +2,7 @@
  * \file
  * \brief lwIP configuration
  *
- * \author Copyright (C) 2019 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
+ * \author Copyright (C) 2019-2020 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
  *
  * \par License
  * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not
@@ -80,6 +80,14 @@ extern "C"
  */
 
 #define DEFAULT_UDP_RECVMBOX_SIZE				16
+
+/**
+ * LWIP_COMPAT_SOCKETS==1: Enable BSD-style sockets functions names through defines. LWIP_COMPAT_SOCKETS==2: Same as ==1
+ * but correctly named functions are created. While this helps code completion, it might conflict with existing
+ * libraries. (only used if you use sockets.c)
+ */
+
+#define LWIP_COMPAT_SOCKETS						0
 
 /**
  * Enable debug message printing, but only if debug message type is enabled AND is of correct type AND is at least
@@ -197,6 +205,12 @@ extern "C"
 #define PRINTPKT_SUPPORT						1
 
 /**
+ * SO_REUSE==1: Enable SO_REUSEADDR option.
+ */
+
+#define SO_REUSE								1
+
+/**
  * TCPIP_MBOX_SIZE: The mailbox size for the tcpip thread messages
  *
  * The queue size value itself is platform-dependent, but is passed to sys_mbox_new() when tcpip_init is called.
@@ -244,6 +258,24 @@ extern "C"
 #define ACD_DEBUG								LWIP_DBG_OFF
 
 /**
+ * Configure debug level of altcp_tls_mbedtls.c
+ */
+
+#define ALTCP_MBEDTLS_DEBUG						LWIP_DBG_OFF
+
+/**
+ * Configure lwIP debug level of the mbed-TLS library
+ */
+
+#define ALTCP_MBEDTLS_LIB_DEBUG					LWIP_DBG_OFF
+
+/**
+ * Configure minimum internal debug level of the mbed-TLS library
+ */
+
+#define ALTCP_MBEDTLS_LIB_DEBUG_LEVEL_MIN		0
+
+/**
  * API_LIB_DEBUG: Enable debugging in api_lib.c.
  */
 
@@ -277,7 +309,7 @@ extern "C"
  * DNS_DEBUG: Enable debugging for DNS.
  */
 
-#define DNS_DEBUG								LWIP_DBG_OFF
+#define DNS_DEBUG								LWIP_DBG_ON
 
 /**
  * ETHARP_DEBUG: Enable debugging in etharp.c.
