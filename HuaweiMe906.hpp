@@ -2,7 +2,7 @@
  * \file
  * \brief HuaweiMe906 class header
  *
- * \author Copyright (C) 2019 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
+ * \author Copyright (C) 2019-2020 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
  *
  * \par License
  * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not
@@ -14,7 +14,12 @@
 
 #include "usbh_def.h"
 
+#include "distortos/ConditionVariable.hpp"
 #include "distortos/Mutex.hpp"
+
+#include <memory>
+
+class HuaweiMe906AsynchronousReader;
 
 namespace distortos
 {
@@ -27,6 +32,9 @@ class Semaphore;
 class HuaweiMe906
 {
 public:
+
+	/// import HuaweiMe906AsynchronousReader as AsynchronousReader
+	using AsynchronousReader = HuaweiMe906AsynchronousReader;
 
 	/// identifier of Huawei ME906 port
 	enum class Port : uint8_t
@@ -87,6 +95,37 @@ public:
 	void registerClass(USBH_HandleTypeDef& host);
 
 	/**
+	 * \brief Starts asynchronous read of one of serial ports.
+	 *
+	 * \warning This function must not be called from interrupt context!
+	 *
+	 * \pre Device is registered.
+	 *
+	 * \param [in] port selects the serial port for which the asynchronous read will be started
+	 * \param [in] asynchronousReader is a reference to the asynchronous reader which will be used
+	 *
+	 * \return 0 on success, error code otherwise:
+	 * - ENOTCONN - the device is disconnected;
+	 */
+
+	int startAsynchronousRead(Port port, AsynchronousReader& asynchronousReader);
+
+	/**
+	 * \brief Stops asynchronous read of one of serial ports.
+	 *
+	 * \warning This function must not be called from interrupt context!
+	 *
+	 * \pre Device is registered.
+	 * \pre Asynchronous read is in progress on selected serial port.
+	 *
+	 * \post Asynchronous read is not in progress.
+	 *
+	 * \param [in] port selects the serial port for which the asynchronous read will be stopped
+	 */
+
+	void stopAsynchronousRead(Port port);
+
+	/**
 	 * \brief Writes data to one of serial ports.
 	 *
 	 * \warning This function must not be called from interrupt context!
@@ -118,15 +157,16 @@ private:
 		 */
 
 		constexpr SerialPort(const uint8_t protocol) :
-				mutex_{distortos::Mutex::Protocol::priorityInheritance},
-				readMutex_{distortos::Mutex::Protocol::priorityInheritance},
+				mutex_{distortos::Mutex::Type::recursive, distortos::Mutex::Protocol::priorityInheritance},
+				readConditionVariable_{},
 				writeMutex_{distortos::Mutex::Protocol::priorityInheritance},
-				readBegin_{},
-				readEnd_{},
-				readSemaphore_{},
+				asynchronousReader_{},
+				readBuffer_{},
 				writeBegin_{},
 				writeEnd_{},
 				writeSemaphore_{},
+				readBegin_{},
+				readEnd_{},
 				readEndpointSize_{},
 				writeEndpointSize_{},
 				writePendingSize_{},
@@ -187,6 +227,32 @@ private:
 		std::pair<int, size_t> read(USBH_HandleTypeDef& host, void* buffer, size_t size);
 
 		/**
+		 * \brief Starts asynchronous read of serial port.
+		 *
+		 * \warning This function must not be called from interrupt context!
+		 *
+		 * \param [in] host is a reference to USB host with which this device is registered
+		 * \param [in] asynchronousReader is a reference to the asynchronous reader which will be used
+		 *
+		 * \return 0 on success, error code otherwise:
+		 * - ENOTCONN - the device is disconnected;
+		 */
+
+		int startAsynchronousRead(USBH_HandleTypeDef& host, AsynchronousReader& asynchronousReader);
+
+		/**
+		 * \brief Stops asynchronous read of serial port.
+		 *
+		 * \warning This function must not be called from interrupt context!
+		 *
+		 * \pre Asynchronous read is in progress.
+		 *
+		 * \post Asynchronous read is not in progress.
+		 */
+
+		void stopAsynchronousRead();
+
+		/**
 		 * \brief Writes data to the serial ports.
 		 *
 		 * \warning This function must not be called from interrupt context!
@@ -206,20 +272,6 @@ private:
 	private:
 
 		/**
-		 * \brief Requests reading of next block of data from the serial port.
-		 *
-		 * \pre No read is in progress.
-		 * \pre \a readBegin_ and \a readEnd_ are valid.
-		 * \pre Size of next block is not 0.
-		 *
-		 * \post Read is in progress.
-		 *
-		 * \param [in] host is a reference to USB host with which this device is registered
-		 */
-
-		void requestRead(USBH_HandleTypeDef& host);
-
-		/**
 		 * \brief Requests writing of next block of data to the serial port.
 		 *
 		 * \pre No write is in progress.
@@ -236,20 +288,17 @@ private:
 		/// mutex for general access serialization
 		distortos::Mutex mutex_;
 
-		/// mutex for read access serialization
-		distortos::Mutex readMutex_;
+		/// condition variable for read access serialization, associated with \a mutex_
+		distortos::ConditionVariable readConditionVariable_;
 
 		/// mutex for write access serialization
 		distortos::Mutex writeMutex_;
 
-		/// pointer to first byte of read block
-		uint8_t* readBegin_;
+		/// pointer to currently associated asynchronous reader
+		AsynchronousReader* asynchronousReader_;
 
-		/// pointer to "one past the last" byte of read block
-		uint8_t* readEnd_;
-
-		/// pointer to semaphore used for synchronization of read operation
-		distortos::Semaphore* readSemaphore_;
+		/// read buffer, \a readEndpointSize_ bytes long
+		std::unique_ptr<uint8_t[]> readBuffer_;
 
 		/// pointer to first byte of write block
 		const uint8_t* writeBegin_;
@@ -259,6 +308,12 @@ private:
 
 		/// pointer to semaphore used for synchronization of write operation
 		distortos::Semaphore* writeSemaphore_;
+
+		/// index of first byte of data available for reading
+		uint16_t readBegin_;
+
+		/// index of "one past the last" byte of data available for reading
+		uint16_t readEnd_;
 
 		/// size of read endpoint, bytes
 		uint16_t readEndpointSize_;
@@ -284,6 +339,8 @@ private:
 		/// identifier of write pipe
 		uint8_t writePipe_;
 	};
+
+	class SynchronousReader;
 
 	/**
 	 * \brief Background process of the device.

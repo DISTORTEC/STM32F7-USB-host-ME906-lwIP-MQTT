@@ -11,6 +11,8 @@
 
 #include "HuaweiMe906.hpp"
 
+#include "HuaweiMe906AsynchronousReader.hpp"
+
 #include "usbh_core.h"
 
 #include "distortos/assert.h"
@@ -21,6 +23,111 @@
 #include <mutex>
 
 #include <cinttypes>
+#include <cstring>
+
+/*---------------------------------------------------------------------------------------------------------------------+
+| private types
++---------------------------------------------------------------------------------------------------------------------*/
+
+/// SynchronousReader class is an asynchronous reader which can be used in a synchronous (i.e. blocking with wait)
+/// fashion
+class HuaweiMe906::SynchronousReader : public HuaweiMe906AsynchronousReader
+{
+public:
+
+	/**
+	 * \brief SynchronousReader's constructor
+	 *
+	 * \param [in] owner is a reference to owner serial port
+	 * \param [out] buffer is the buffer to which the data will be written, must be valid
+	 * \param [in] size is the size of \a buffer, bytes
+	 */
+
+	constexpr explicit SynchronousReader(HuaweiMe906::SerialPort& owner, void* const buffer, const size_t size) :
+			semaphore_{0},
+			owner_{owner},
+			buffer_{buffer},
+			size_{size}
+	{
+
+	}
+
+	/**
+	 * \brief SynchronousReader's function call operator
+	 *
+	 * Called by HuaweiMe906's background process when new data is available for reading (\a size != 0) or when device
+	 * disconnects (\a size == 0).
+	 *
+	 * \param [in] buffer is the buffer with data that was read
+	 * \param [in] size is the size of \a buffer, bytes, 0 if device was disconnected
+	 *
+	 * \return number of consumed bytes, must be less than or equal to \a size
+	 */
+
+	size_t operator()(const void* const buffer, const size_t size) override
+	{
+		owner_.stopAsynchronousRead();
+
+		const auto consumed = std::min(size_, size);
+		if (consumed != 0)
+		{
+			assert(buffer != nullptr);
+			memcpy(buffer_, buffer, consumed);
+		}
+
+		size_ = consumed;
+		semaphore_.post();
+		return consumed;
+	}
+
+	/**
+	 * \brief Reads data from the serial port.
+	 *
+	 * \warning This function must not be called from interrupt context!
+	 *
+	 * \pre \a buffer_ is valid.
+	 *
+	 * \param [in] host is a reference to USB host with which this device is registered
+	 *
+	 * \return pair with return code (0 on success, error code otherwise) and number of read bytes (valid even when
+	 * error code is returned); error codes:
+	 * - ENOTCONN - the device is disconnected;
+	 */
+
+	std::pair<int, size_t> read(USBH_HandleTypeDef& host)
+	{
+		assert(buffer_ != nullptr);
+
+		if (size_ == 0)
+			return {{}, {}};
+
+		{
+			const auto ret = owner_.startAsynchronousRead(host, *this);
+			if (ret != 0)
+				return {ret, {}};
+		}
+		{
+			const auto ret = semaphore_.wait();
+			assert(ret == 0);
+		}
+
+		return {size_ != 0 ? 0 : ENOTCONN, size_};
+	}
+
+private:
+
+	/// semaphore used for synchronization
+	distortos::Semaphore semaphore_;
+
+	/// reference to owner serial port
+	HuaweiMe906::SerialPort& owner_;
+
+	/// buffer to which the data will be written, must be valid
+	void* buffer_;
+
+	/// size of \a buffer_, bytes
+	size_t size_;
+};
 
 /*---------------------------------------------------------------------------------------------------------------------+
 | public functions
@@ -44,6 +151,22 @@ void HuaweiMe906::registerClass(USBH_HandleTypeDef& host)
 	host_ = &host;
 }
 
+int HuaweiMe906::startAsynchronousRead(const Port port, AsynchronousReader& asynchronousReader)
+{
+	assert(host_ != nullptr);
+
+	auto& serialPort = port == Port::pcui ? pcuiPort_ : port == Port::networkCard ? networkCardPort_ : gpsPort_;
+	return serialPort.startAsynchronousRead(*host_, asynchronousReader);
+}
+
+void HuaweiMe906::stopAsynchronousRead(const Port port)
+{
+	assert(host_ != nullptr);
+
+	auto& serialPort = port == Port::pcui ? pcuiPort_ : port == Port::networkCard ? networkCardPort_ : gpsPort_;
+	return serialPort.stopAsynchronousRead();
+}
+
 int HuaweiMe906::write(const Port port, const void* const buffer, const size_t size)
 {
 	assert(host_ != nullptr);
@@ -60,25 +183,35 @@ void HuaweiMe906::SerialPort::backgroundProcess(USBH_HandleTypeDef& host)
 {
 	const std::lock_guard lockGuard {mutex_};
 
-	if (readSemaphore_ != nullptr)
+	if (readPending_ == true && USBH_LL_GetURBState(&host, readPipe_) == USBH_URB_DONE)
 	{
-		if (readPending_ == false)
-			requestRead(host);
-		else if (USBH_LL_GetURBState(&host, readPipe_) == USBH_URB_DONE)
-		{
-			readPending_ = {};
+		readPending_ = {};
 
-			const auto size = USBH_LL_GetLastXferSize(&host, readPipe_);
-			assert(size != 0);
-			USBH_UsrLog("HuaweiMe906::SerialPort(%p)::backgroundProcess: received %" PRIu32 " bytes", this, size);
+		const auto size = USBH_LL_GetLastXferSize(&host, readPipe_);
+		assert(size != 0);
+		USBH_UsrLog("HuaweiMe906::SerialPort(%p)::backgroundProcess: received %" PRIu32 " bytes", this, size);
 
-			readBegin_ += size;
+		readBegin_ = {};
+		readEnd_ = size;
+	}
 
-			auto& readSemaphore = *readSemaphore_;
-			readSemaphore_ = {};
-			const auto ret = readSemaphore.post();
-			assert(ret == 0);
-		}
+	while (asynchronousReader_ != nullptr && readBegin_ != readEnd_)
+	{
+		const auto consumed = (*asynchronousReader_)(readBuffer_.get() + readBegin_, readEnd_ - readBegin_);
+		assert(consumed <= static_cast<unsigned>(readEnd_ - readBegin_));
+		readBegin_ += consumed;
+
+		USBH_UsrLog("HuaweiMe906::SerialPort(%p)::backgroundProcess: asynchronous reader consumed %zu bytes, "
+				"%d bytes left", this, consumed, readEnd_ - readBegin_);
+	}
+
+	if (readPending_ == false && readBegin_ == readEnd_)
+	{
+		USBH_UsrLog("HuaweiMe906::SerialPort(%p)::backgroundProcess: requesting %zu bytes", this, readEndpointSize_);
+
+		const auto ret = USBH_BulkReceiveData(&host, readBuffer_.get(), readEndpointSize_, readPipe_);
+		assert(ret == USBH_OK);
+		readPending_ = true;
 	}
 
 	if (writeSemaphore_ != nullptr)
@@ -140,15 +273,15 @@ void HuaweiMe906::SerialPort::interfaceDeinitialize(USBH_HandleTypeDef& host)
 		writePipe_ = {};
 	}
 
-	if (readSemaphore_ != nullptr)
-	{
-		readPending_ = {};
+	if (asynchronousReader_ != nullptr)
+		(*asynchronousReader_)({}, {});
 
-		auto& readSemaphore = *readSemaphore_;
-		readSemaphore_ = {};
-		const auto ret = readSemaphore.post();
-		assert(ret == 0);
-	}
+	readPending_ = {};
+	readBegin_ = {};
+	readEnd_ = {};
+	readBuffer_.reset();
+
+	readConditionVariable_.notifyAll();
 
 	if (writeSemaphore_ != nullptr)
 	{
@@ -217,6 +350,9 @@ USBH_StatusTypeDef HuaweiMe906::SerialPort::interfaceInitialize(USBH_HandleTypeD
 			return ret;
 	}
 
+	readBuffer_.reset(new decltype(readBuffer_)::element_type[readEndpointSize_]);
+	assert(readBuffer_ != nullptr);
+
 	active_ = true;
 
 	USBH_UsrLog("HuaweiMe906::SerialPort(%p)::interfaceInitialize: interface %" PRIu8 ", "
@@ -230,31 +366,27 @@ USBH_StatusTypeDef HuaweiMe906::SerialPort::interfaceInitialize(USBH_HandleTypeD
 
 std::pair<int, size_t> HuaweiMe906::SerialPort::read(USBH_HandleTypeDef& host, void* const buffer, const size_t size)
 {
-	const std::lock_guard readLockGuard {readMutex_};
+	SynchronousReader synchronousReader {*this, buffer, size};
+	return synchronousReader.read(host);
+}
 
-	assert(buffer != nullptr);
-
-	if (size == 0)
-		return {{}, {}};
-
-	distortos::Semaphore semaphore {0};
-
+int HuaweiMe906::SerialPort::startAsynchronousRead(USBH_HandleTypeDef& host, AsynchronousReader& asynchronousReader)
+{
 	{
 		const std::lock_guard lockGuard {mutex_};
 
+		const auto ret = readConditionVariable_.wait(mutex_,
+				[this]()
+				{
+					return asynchronousReader_ == nullptr || active_ == false;
+				});
+		assert(ret == 0);
+
 		if (active_ == false)
-			return {ENOTCONN, {}};
+			return ENOTCONN;
 
-		readBegin_ = static_cast<decltype(readBegin_)>(buffer);
-		readEnd_ = readBegin_ + size;
-		readSemaphore_ = &semaphore;
+		asynchronousReader_ = &asynchronousReader;
 	}
-
-	const auto scopeGuard = estd::makeScopeGuard([this]()
-			{
-				readBegin_ = {};
-				readEnd_ = {};
-			});
 
 #if USBH_USE_OS == 1
 	{
@@ -264,13 +396,18 @@ std::pair<int, size_t> HuaweiMe906::SerialPort::read(USBH_HandleTypeDef& host, v
 	}
 #endif	// USBH_USE_OS == 1
 
+	return {};
+}
+
+void HuaweiMe906::SerialPort::stopAsynchronousRead()
+{
 	{
-		const auto ret = semaphore.wait();
-		assert(ret == 0);
+		const std::lock_guard lockGuard {mutex_};
+		assert(asynchronousReader_ != nullptr);
+		asynchronousReader_ = {};
 	}
 
-	const auto bytesRead = readBegin_ - static_cast<decltype(readBegin_)>(buffer);
-	return {bytesRead != 0 ? 0 : ENOTCONN, bytesRead};
+	readConditionVariable_.notifyOne();
 }
 
 int HuaweiMe906::SerialPort::write(USBH_HandleTypeDef& host, const void* const buffer, const size_t size)
@@ -316,21 +453,6 @@ int HuaweiMe906::SerialPort::write(USBH_HandleTypeDef& host, const void* const b
 /*---------------------------------------------------------------------------------------------------------------------+
 | SerialPort private functions
 +---------------------------------------------------------------------------------------------------------------------*/
-
-void HuaweiMe906::SerialPort::requestRead(USBH_HandleTypeDef& host)
-{
-	assert(readPending_ == false);
-	assert(readBegin_ != nullptr && readEnd_ != nullptr);
-
-	const auto size = std::min<size_t>(readEnd_ - readBegin_, readEndpointSize_);
-	assert(size != 0);
-
-	USBH_UsrLog("HuaweiMe906::SerialPort(%p)::requestRead: requesting %zu bytes", this, size);
-
-	const auto ret = USBH_BulkReceiveData(&host, readBegin_, size, readPipe_);
-	assert(ret == USBH_OK);
-	readPending_ = true;
-}
 
 void HuaweiMe906::SerialPort::requestWrite(USBH_HandleTypeDef& host)
 {
