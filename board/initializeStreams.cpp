@@ -2,7 +2,7 @@
  * \file
  * \brief Definition initializeStreams()
  *
- * \author Copyright (C) 2019 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
+ * \author Copyright (C) 2019-2020 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
  *
  * \par License
  * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not
@@ -12,8 +12,6 @@
 #define _GNU_SOURCE
 
 #include "distortos/board/initializeStreams.hpp"
-
-#include "AlternateFunctionPinInitializer.hpp"
 
 #include "distortos/board/standardOutputStream.h"
 
@@ -38,24 +36,6 @@ namespace
 /*---------------------------------------------------------------------------------------------------------------------+
 | local objects
 +---------------------------------------------------------------------------------------------------------------------*/
-
-/// array with initializers for pins with alternate function
-const AlternateFunctionPinInitializer alternateFunctionPinInitializers[]
-{
-#if defined(DISTORTOS_BOARD_ST_32F746GDISCOVERY)
-		// USART1_TX
-		{chip::Pin::pa9, chip::PinAlternateFunction::af7, false, chip::PinOutputSpeed::veryHigh, chip::PinPull::up},
-		// USART1_RX
-		{chip::Pin::pb7, chip::PinAlternateFunction::af7, false, chip::PinOutputSpeed::veryHigh, chip::PinPull::up},
-#elif defined(DISTORTOS_BOARD_ST_NUCLEO_F767ZI)
-		// USART3_TX
-		{chip::Pin::pd8, chip::PinAlternateFunction::af7, false, chip::PinOutputSpeed::veryHigh, chip::PinPull::up},
-		// USART3_RX
-		{chip::Pin::pd9, chip::PinAlternateFunction::af7, false, chip::PinOutputSpeed::veryHigh, chip::PinPull::up},
-#else
-#error "Unsupported board!"
-#endif
-};
 
 /// read buffer for \a serialPort
 uint8_t serialPortReadBuffer[256];
@@ -193,10 +173,6 @@ FILE* standardOutputStream;
 
 void initializeStreams()
 {
-	for (auto& initializer : alternateFunctionPinInitializers)
-		chip::configureAlternateFunctionPin(initializer.pin, initializer.alternateFunction, initializer.openDrain,
-				initializer.outputSpeed, initializer.pull);
-
 	standardOutputStream = openSerialPort("w", estd::ContiguousRange<char>{standardOutputStreamBuffer});
 }
 
