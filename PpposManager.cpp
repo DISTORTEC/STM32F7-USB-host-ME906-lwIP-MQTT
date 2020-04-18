@@ -235,15 +235,20 @@ bool PpposManager::executeCommand(FILE& outputStream, FILE& inputStream, const c
 
 void PpposManager::pppLinkStatus(const int errorCode)
 {
+	char buffer[IP4ADDR_STRLEN_MAX];
+
 	switch (errorCode)
 	{
 		case PPPERR_NONE:	// no error
 			fiprintf(standardOutputStream, "PpposManager::pppLinkStatus: PPPERR_NONE\r\n");
-			fiprintf(standardOutputStream, "  ip4 = %s\r\n", ip4addr_ntoa(netif_ip4_addr(&netif_)));
-			fiprintf(standardOutputStream, "  gateway = %s\r\n", ip4addr_ntoa(netif_ip4_gw(&netif_)));
-			fiprintf(standardOutputStream, "  netmask = %s\r\n", ip4addr_ntoa(netif_ip4_netmask(&netif_)));
-			fiprintf(standardOutputStream, "  dns1 = %s\r\n", ipaddr_ntoa(dns_getserver(0)));
-			fiprintf(standardOutputStream, "  dns2 = %s\r\n", ipaddr_ntoa(dns_getserver(1)));
+			fiprintf(standardOutputStream, "  ip4 = %s\r\n", ip4addr_ntoa_r(netif_ip4_addr(&netif_), buffer,
+					sizeof(buffer)));
+			fiprintf(standardOutputStream, "  gateway = %s\r\n", ip4addr_ntoa_r(netif_ip4_gw(&netif_), buffer,
+					sizeof(buffer)));
+			fiprintf(standardOutputStream, "  netmask = %s\r\n", ip4addr_ntoa_r(netif_ip4_netmask(&netif_), buffer,
+					sizeof(buffer)));
+			fiprintf(standardOutputStream, "  dns1 = %s\r\n", ipaddr_ntoa_r(dns_getserver(0), buffer, sizeof(buffer)));
+			fiprintf(standardOutputStream, "  dns2 = %s\r\n", ipaddr_ntoa_r(dns_getserver(1), buffer, sizeof(buffer)));
 			break;
 		case PPPERR_PARAM:	// invalid parameter
 			fiprintf(standardOutputStream, "PpposManager::pppLinkStatus: PPPERR_PARAM\r\n");

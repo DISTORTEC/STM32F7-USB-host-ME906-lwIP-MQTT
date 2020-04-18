@@ -340,7 +340,9 @@ int main()
 		assert(addressInformation->ai_addr != nullptr && addressInformation->ai_addr->sa_family == AF_INET);
 		const auto internetAddress = reinterpret_cast<const sockaddr_in*>(addressInformation->ai_addr);
 		inet_addr_to_ip4addr(&ip, &internetAddress->sin_addr);
-		fiprintf(standardOutputStream, "%s is %s\r\n", addressInformation->ai_canonname, ip4addr_ntoa(&ip));
+		char buffer[IP4ADDR_STRLEN_MAX];
+		fiprintf(standardOutputStream, "%s is %s\r\n", addressInformation->ai_canonname, ip4addr_ntoa_r(&ip, buffer,
+				sizeof(buffer)));
 
 		freeaddrinfo(addressInformation);
 	}
