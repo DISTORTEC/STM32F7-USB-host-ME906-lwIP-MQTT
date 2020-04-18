@@ -2,7 +2,7 @@
  * \file
  * \brief PpposManager class header
  *
- * \author Copyright (C) 2019 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
+ * \author Copyright (C) 2019-2020 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
  *
  * \par License
  * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not
@@ -44,7 +44,7 @@ public:
 			huaweiMe906_{huaweiMe906},
 			pcb_{},
 			semaphore_{},
-			connected_{}
+			state_{State::disconnected}
 	{
 
 	}
@@ -60,6 +60,17 @@ public:
 	void initialize();
 
 private:
+
+	/// state
+	enum class State : uint8_t
+	{
+		/// disconnected
+		disconnected,
+		/// connecting
+		connecting,
+		/// connected
+		connected,
+	};
 
 	/**
 	 * \brief Executes chat script, connecting the modem to the network.
@@ -108,7 +119,7 @@ private:
 	 * \brief Executes PPPos phase, switching the modem to PPPoS mode and routing the data read from modem back to lwIP.
 	 */
 
-	void ppposPhase() const;
+	void ppposPhase();
 
 	/**
 	 * \brief Internal thread function of the object.
@@ -154,8 +165,8 @@ private:
 	/// pointer to semaphore used for notification about change of connection state
 	distortos::Semaphore* semaphore_;
 
-	/// true if connected, false otherwise
-	bool connected_;
+	/// current state
+	State state_;
 };
 
 #endif	// PPPOSMANAGER_HPP_

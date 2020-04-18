@@ -210,7 +210,7 @@ void PpposManager::pppLinkStatus(const int errorCode)
 	{
 		const std::lock_guard lockGuard {mutex_};
 
-		connected_ = errorCode == PPPERR_NONE;
+		state_ = errorCode == PPPERR_NONE ? State::connected : State::disconnected;
 
 		if (semaphore_ != nullptr)
 		{
@@ -234,12 +234,15 @@ u32_t PpposManager::ppposOutput(u8_t* const buffer, const u32_t size) const
 	return size;
 }
 
-void PpposManager::ppposPhase() const
+void PpposManager::ppposPhase()
 {
+	state_ = State::connecting;
+
 	{
 		const auto ret = pppapi_connect(pcb_, 0);
 		if (ret != ERR_OK)
 		{
+			state_ = State::disconnected;
 			fiprintf(standardOutputStream, "PpposManager::ppposPhase: pppapi_connect() failed, ret = %d\r\n", ret);
 			return;
 		}
@@ -249,12 +252,17 @@ void PpposManager::ppposPhase() const
 			{
 				const auto ret = pppapi_close(pcb_, 0);
 				if (ret != ERR_OK)
-					fiprintf(standardOutputStream, "PpposManager::ppposPhase: pppapi_close() failed, ret = %d\r\n",
-							ret);
+					fiprintf(standardOutputStream, "PpposManager::ppposPhase: pppapi_close() failed, ret = %d\r\n", ret);
 			});
 
 	while (1)
 	{
+		if (state_ == State::disconnected)
+		{
+			fiprintf(standardOutputStream, "PpposManager::ppposPhase: disconnected\r\n");
+			return;
+		}
+
 		uint8_t buffer[64];
 		size_t bytesRead;
 		{
@@ -289,7 +297,7 @@ void PpposManager::threadFunction()
 		{
 			std::unique_lock uniqueLock {mutex_};
 
-			if (connected_ == true)
+			if (state_ != State::disconnected)
 			{
 				distortos::Semaphore semaphore {0};
 				semaphore_ = &semaphore;
