@@ -11,6 +11,7 @@
 
 #include "PpposManager.hpp"
 
+#include "HuaweiMe906AsynchronousReader.hpp"
 #include "openHuaweiMe906.hpp"
 
 #include "distortos/DynamicThread.hpp"
@@ -25,6 +26,91 @@
 #include <mutex>
 
 #include <cstring>
+
+/*---------------------------------------------------------------------------------------------------------------------+
+| private types
++---------------------------------------------------------------------------------------------------------------------*/
+
+/// AsynchronousReader is an asynchronous reader for PPPoS manager
+class PpposManager::AsynchronousReader : public HuaweiMe906AsynchronousReader
+{
+public:
+
+	/**
+	 * \brief AsynchronousReader's constructor
+	 *
+	 * \param [in] pcb is a lwIP's PPP protocol control block
+	 */
+
+	constexpr explicit AsynchronousReader(ppp_pcb* const pcb) :
+			semaphore_{0},
+			pcb_{pcb}
+	{
+
+	}
+
+	/**
+	 * \brief AsynchronousReader's function call operator
+	 *
+	 * Called by HuaweiMe906's background process when new data is available for reading (\a size != 0) or when device
+	 * disconnects (\a size == 0).
+	 *
+	 * \param [in] buffer is the buffer with data that was read
+	 * \param [in] size is the size of \a buffer, bytes, 0 if device was disconnected
+	 *
+	 * \return number of consumed bytes, must be less than or equal to \a size
+	 */
+
+	size_t operator()(const void* const buffer, const size_t size) override
+	{
+		if (size == 0)
+		{
+			fiprintf(standardOutputStream, "PpposManager::AsynchronousReader::operator(): disconnected\r\n");
+			semaphore_.post();
+			return {};
+		}
+
+		const auto ret = pppos_input_tcpip(pcb_, static_cast<u8_t*>(const_cast<void*>(buffer)), size);
+		if (ret != ERR_OK)
+		{
+			fiprintf(standardOutputStream, "PpposManager::AsynchronousReader::operator(): pppos_input_tcpip() failed, ret = %d\r\n",
+					ret);
+			semaphore_.post();
+			return {};
+		}
+
+		return size;
+	}
+
+	/**
+	 * \brief Posts a notification for wait().
+	 */
+
+	void post()
+	{
+		semaphore_.post();
+	}
+
+	/**
+	 * \brief Waits for notification sent by post().
+	 *
+	 * \warning This function must not be called from interrupt context!
+	 */
+
+	void wait()
+	{
+		const auto ret = semaphore_.wait();
+		assert(ret == 0);
+	}
+
+private:
+
+	/// semaphore used for synchronization
+	distortos::Semaphore semaphore_;
+
+	/// lwIP's PPP protocol control block
+	ppp_pcb* pcb_;
+};
 
 /*---------------------------------------------------------------------------------------------------------------------+
 | public functions
@@ -211,13 +297,10 @@ void PpposManager::pppLinkStatus(const int errorCode)
 		const std::lock_guard lockGuard {mutex_};
 
 		state_ = errorCode == PPPERR_NONE ? State::connected : State::disconnected;
-
-		if (semaphore_ != nullptr)
+		if (state_ != State::connected)
 		{
-			auto& semaphore = *semaphore_;
-			semaphore_ = {};
-			const auto ret = semaphore.post();
-			assert(ret == 0);
+			assert(asynchronousReader_ != nullptr);
+			asynchronousReader_->post();
 		}
 	}
 }
@@ -236,54 +319,56 @@ u32_t PpposManager::ppposOutput(u8_t* const buffer, const u32_t size) const
 
 void PpposManager::ppposPhase()
 {
-	state_ = State::connecting;
+	std::unique_lock uniqueLock {mutex_};
+
+	AsynchronousReader asynchronousReader {pcb_};
 
 	{
-		const auto ret = pppapi_connect(pcb_, 0);
-		if (ret != ERR_OK)
+		const auto ret = huaweiMe906_.startAsynchronousRead(HuaweiMe906::Port::networkCard, asynchronousReader);
+		if (ret != 0)
 		{
-			state_ = State::disconnected;
-			fiprintf(standardOutputStream, "PpposManager::ppposPhase: pppapi_connect() failed, ret = %d\r\n", ret);
+			fiprintf(standardOutputStream, "PpposManager::ppposPhase: startAsynchronousRead() failed, ret = %d\r\n", ret);
 			return;
 		}
 	}
 
-	const auto disconnectScopeGuard = estd::makeScopeGuard([this]()
+	asynchronousReader_ = &asynchronousReader;
+
+	const auto stopScopeGuard = estd::makeScopeGuard([this]()
 			{
-				const auto ret = pppapi_close(pcb_, 0);
-				if (ret != ERR_OK)
-					fiprintf(standardOutputStream, "PpposManager::ppposPhase: pppapi_close() failed, ret = %d\r\n", ret);
+				asynchronousReader_ = {};
+				huaweiMe906_.stopAsynchronousRead(HuaweiMe906::Port::networkCard);
 			});
 
-	while (1)
 	{
-		if (state_ == State::disconnected)
 		{
-			fiprintf(standardOutputStream, "PpposManager::ppposPhase: disconnected\r\n");
-			return;
-		}
-
-		uint8_t buffer[64];
-		size_t bytesRead;
-		{
-			int ret;
-			std::tie(ret, bytesRead) = huaweiMe906_.read(HuaweiMe906::Port::networkCard, buffer, sizeof(buffer));
-			if (ret != 0)
+			const auto ret = pppapi_connect(pcb_, 0);
+			if (ret != ERR_OK)
 			{
-				fiprintf(standardOutputStream, "PpposManager::ppposPhase: read failed, ret = %d\r\n", ret);
+				fiprintf(standardOutputStream, "PpposManager::ppposPhase: pppapi_connect() failed, ret = %d\r\n", ret);
 				return;
 			}
 		}
 
-		if (bytesRead == 0)
-			continue;
+		state_ = State::connecting;
 
-		const auto ret = pppos_input_tcpip(pcb_, buffer, bytesRead);
-		if (ret != ERR_OK)
-		{
-			fiprintf(standardOutputStream, "PpposManager::ppposPhase: pppos_input_tcpip() failed, ret = %d\r\n", ret);
-			return;
-		}
+		const auto disconnectScopeGuard = estd::makeScopeGuard([this]()
+				{
+					const auto ret = pppapi_close(pcb_, 0);
+					if (ret != ERR_OK)
+						fiprintf(standardOutputStream, "PpposManager::ppposPhase: pppapi_close() failed, ret = %d\r\n", ret);
+				});
+
+		uniqueLock.unlock();
+		asynchronousReader.wait();
+		uniqueLock.lock();
+	}
+
+	while (state_ != State::disconnected)
+	{
+		uniqueLock.unlock();
+		asynchronousReader.wait();
+		uniqueLock.lock();
 	}
 }
 
@@ -293,19 +378,6 @@ void PpposManager::threadFunction()
 	{
 		chatScriptPhase();
 		ppposPhase();
-
-		{
-			std::unique_lock uniqueLock {mutex_};
-
-			if (state_ != State::disconnected)
-			{
-				distortos::Semaphore semaphore {0};
-				semaphore_ = &semaphore;
-				uniqueLock.unlock();
-				const auto ret = semaphore.wait();
-				assert(ret == 0);
-			}
-		}
 	}
 }
 

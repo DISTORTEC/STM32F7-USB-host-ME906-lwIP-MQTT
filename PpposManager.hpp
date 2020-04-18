@@ -20,13 +20,6 @@
 
 class HuaweiMe906;
 
-namespace distortos
-{
-
-class Semaphore;
-
-}	// namespace distortos
-
 /// PpposManager class is a manager of lwIP's PPPoS interface
 class PpposManager
 {
@@ -39,11 +32,11 @@ public:
 	 */
 
 	constexpr explicit PpposManager(HuaweiMe906& huaweiMe906) :
-			mutex_{distortos::Mutex::Protocol::priorityInheritance},
+			mutex_{distortos::Mutex::Type::recursive, distortos::Mutex::Protocol::priorityInheritance},
 			netif_{},
+			asynchronousReader_{},
 			huaweiMe906_{huaweiMe906},
 			pcb_{},
-			semaphore_{},
 			state_{State::disconnected}
 	{
 
@@ -60,6 +53,8 @@ public:
 	void initialize();
 
 private:
+
+	class AsynchronousReader;
 
 	/// state
 	enum class State : uint8_t
@@ -156,14 +151,14 @@ private:
 	/// lwIP's network interface
 	netif netif_;
 
+	/// currently active asynchronous reader
+	AsynchronousReader* asynchronousReader_;
+
 	/// reference to HuaweiMe906 object which will be used for communication
 	HuaweiMe906& huaweiMe906_;
 
 	/// lwIP's PPP protocol control block
 	ppp_pcb* pcb_;
-
-	/// pointer to semaphore used for notification about change of connection state
-	distortos::Semaphore* semaphore_;
 
 	/// current state
 	State state_;
