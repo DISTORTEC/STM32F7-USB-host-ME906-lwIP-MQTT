@@ -2,7 +2,7 @@
  * \file
  * \brief HuaweiMe906 class implementation
  *
- * \author Copyright (C) 2019 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
+ * \author Copyright (C) 2019-2020 Kamil Szczygiel http://www.distortec.com http://www.freddiechopin.info
  *
  * \par License
  * This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not
@@ -367,7 +367,11 @@ void HuaweiMe906::interfaceDeinitialize(USBH_HandleTypeDef& host)
 
 USBH_StatusTypeDef HuaweiMe906::interfaceInitialize(USBH_HandleTypeDef& host)
 {
-	if (host.device.DevDesc.idVendor != 0x12d1 || host.device.DevDesc.idProduct != 0x1573)
+	const auto vid = host.device.DevDesc.idVendor;
+	const auto pid = host.device.DevDesc.idProduct;
+	const auto match = (vid == 0x12d1 && pid == 0x1573) || (vid == 0x3f0 && pid == 0x581d);
+
+	if (match == false)
 		return USBH_FAIL;
 
 	{
